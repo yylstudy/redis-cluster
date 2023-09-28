@@ -1,0 +1,2 @@
+1. Check {{ .Values.clusterName }} deploy command:
+  kubectl get pod --namespace {{ .Values.namespace }} -o wide |grep "{{ .Values.clusterName }}"

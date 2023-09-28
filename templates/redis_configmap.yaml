@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.clusterName }}-conf
+  namespace: {{ .Values.namespace }}
+data:
+  cluster-announce-ip: {{ .Values.clusterAnnounceIp | quote }}
+  cluster-announce-port-start: {{ .Values.clusterAnnouncePortStart | quote }}
+  cluster-announce-bus-port-start: {{ .Values.clusterAnnounceBusPortStart | quote }}
+  redis.password: {{ .Values.password }}
+  replicas: {{ .Values.statefulSetReplicas | quote }}
+  cluster.replicas: {{ .Values.clusterReplicas | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.clusterName }}-base-conf
+  namespace: {{ .Values.namespace }}
+data:
+  redis.conf: |
+    bind 0.0.0.0 ::
+    tcp-backlog 511
+    timeout 0
+    port 6379
+    tcp-keepalive 300
+    daemonize no
+    supervised no
+    pidfile /var/run/redis.pid
+    protected-mode yes
+    cluster-enabled yes
+    cluster-node-timeout 5000
+    cluster-require-full-coverage no
+    cluster-migration-barrier 0
+    cluster-config-file /data/nodes.conf
+    dir /data
+    tcp-keepalive 300
+    slowlog-max-len 158
+    stream-node-max-bytes 2048
+    save ""
+    maxmemory 0
+    appendonly no
+    logfile "/data/redis.log"
+    masterauth {{ .Values.password }}
+    requirepass {{ .Values.password }}
+    lazyfree-lazy-user-del yes
+    include /data/cluster-announce.conf
+

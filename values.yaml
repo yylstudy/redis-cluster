@@ -1,0 +1,58 @@
+#集群名称
+clusterName: redis-cluster
+#命名空间
+namespace: default
+#vip
+clusterAnnounceIp: 10.100.243.23
+#redis实例最小6379映射的NodePort端口，每个实例递增
+clusterAnnouncePortStart: 31620
+#redis实例最小的bus端口映射的NodePort端口，每个实例递增
+clusterAnnounceBusPortStart: 31650
+#redis密码和集群密码
+password: cqt@12345
+#redis实例数
+statefulSetReplicas: 6
+#redis集群副本数
+clusterReplicas: 1
+accessModes: ReadWriteMany
+#资源情况
+resources: 
+  requests:
+    cpu: 100m
+    memory: 1Gi
+  limits:
+    cpu: "2"
+    memory: 1Gi
+
+storageClassName: cephfs
+storageCapacity: 10Gi
+
+
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+    - labelSelector:
+        matchExpressions:
+        - key: app
+          operator: In
+          values:
+          - redis-cluster
+      topologyKey: kubernetes.io/hostname
+
+livenessProbe:
+  exec:
+    command: ["/bin/sh","-c","redis-cli -h 127.0.0.1 ping"]
+  failureThreshold: 3
+  initialDelaySeconds: 15
+  periodSeconds: 5
+  successThreshold: 1
+  timeoutSeconds: 3
+
+readinessProbe:
+  exec:
+    command: ["/bin/sh","-c","redis-cli -h 127.0.0.1 ping"]
+  failureThreshold: 3
+  initialDelaySeconds: 15
+  periodSeconds: 5
+  successThreshold: 1
+  timeoutSeconds: 3

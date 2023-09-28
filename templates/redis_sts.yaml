@@ -1,0 +1,229 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: {{ .Values.clusterName }}
+  name: {{ .Values.clusterName }}
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.statefulSetReplicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.clusterName }}
+  serviceName: {{ .Values.clusterName }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.clusterName }}
+    spec:
+      {{- if not .Values.affinity }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - {{ .Values.clusterName }}
+            topologyKey: kubernetes.io/hostname
+      {{- else }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      tolerations:
+      - effect: NoSchedule
+        key: node.kubernetes.io/unschedulable
+        operator: Exists
+      nodeSelector:
+        deploy-redis: "true"
+      initContainers:
+      - name: init-redis
+        image: alpine:3.16.2
+        env:
+        - name: CLUSTER_ANNOUNCE_PORT_START
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.clusterName }}-conf
+              key: cluster-announce-port-start
+        - name: CLUSTER_ANNOUNCE_BUS_PORT_START
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.clusterName }}-conf
+              key: cluster-announce-bus-port-start
+        - name: CLUSTER_ANNOUNCE_IP
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.clusterName }}-conf
+              key: cluster-announce-ip
+        command:
+        - sh
+        - "-c"
+        - |
+          set -ex
+          ordinal=$(echo $HOSTNAME| awk -F'-' '{print $NF}')
+          if [[ ! -f /data/cluster-announce.conf ]] ;then
+            cluster_announce_port=$(($CLUSTER_ANNOUNCE_PORT_START+ordinal))
+            cluster_announce_bus_port=$(($CLUSTER_ANNOUNCE_BUS_PORT_START+ordinal))
+            echo $cluster_announce_port
+            echo $cluster_announce_bus_port
+            echo "cluster-announce-ip ${CLUSTER_ANNOUNCE_IP}" >>  /data/cluster-announce.conf
+            echo "cluster-announce-port ${cluster_announce_port}" >>  /data/cluster-announce.conf
+            echo "cluster-port ${cluster_announce_bus_port}" >>  /data/cluster-announce.conf
+            echo "cluster-announce-bus-port ${cluster_announce_bus_port}" >>  /data/cluster-announce.conf
+          else
+            echo 'redis配置已经初始化!'
+          fi          
+
+        volumeMounts:
+        - name: {{ .Values.clusterName }}-data
+          mountPath: /data
+      containers:
+      - name: redis
+        image: redis:7.0.5
+        env:
+        - name: REDISCLI_AUTH
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.clusterName }}-conf
+              key: redis.password
+        - name: REPLICAS_NUM
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.clusterName }}-conf
+              key: replicas
+        - name: CLUSTER_REPLICAS
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.clusterName }}-conf
+              key: cluster.replicas
+        - name: CLUSTER_ANNOUNCE_PORT_START
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.clusterName }}-conf
+              key: cluster-announce-port-start
+        - name: CLUSTER_ANNOUNCE_IP
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.clusterName }}-conf
+              key: cluster-announce-ip
+        command:
+        - bash
+        - "-c"
+        - |
+          set -ex
+          podnum=$(echo $HOSTNAME| awk -F'-' '{print $NF}')
+          replicas=$(($REPLICAS_NUM-1))
+          if [[ $podnum -eq $replicas ]] && [[ `grep 'cluster-announce-ip' /data/cluster-announce.conf|wc -l` -ge 1 ]] ;then
+            if [[ ! -f /data/nodes.conf ]] || [[ `cat /data/nodes.conf |wc -l` -eq 2 ]] ;then
+              cluster_info=""
+              echo $REPLICAS_NUM
+              for ((i=0; i<$REPLICAS_NUM; i++))
+              do
+                port=$((CLUSTER_ANNOUNCE_PORT_START + i))
+                cluster_info+=" $CLUSTER_ANNOUNCE_IP:$port"
+              done
+              echo $cluster_info
+              redis-server /etc/redis/redis.conf --daemonize yes
+              echo "后台启动redis成功"
+              sleep 20
+              echo "创建redis集群"
+          redis-cli -a ${REDISCLI_AUTH} --cluster create $cluster_info --cluster-replicas $CLUSTER_REPLICAS <<EOF
+          yes
+          EOF
+              echo '集群初始化成功'
+              sleep 5
+              clientPort=$(($CLUSTER_ANNOUNCE_PORT_START+podnum))
+              redis-cli -a ${REDISCLI_AUTH} shutdown nosave
+              echo "正在启动redis服务"
+              redis-server /etc/redis/redis.conf 
+              fi
+          else
+            echo '无需初始化集群信息'
+            redis-server /etc/redis/redis.conf
+          fi
+
+        ports:
+        - containerPort: 6379
+          name: redis
+        {{- if not .Values.livenessProbe }}
+        livenessProbe:
+          exec:
+            command: ["/bin/sh","-c","redis-cli -h 127.0.0.1 ping"]
+          failureThreshold: 3
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 3
+        {{- else }}
+        {{- with .Values.livenessProbe }}
+        livenessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- end }}
+        {{- if not .Values.readinessProbe }}
+        readinessProbe:
+          exec:
+            command: ["/bin/sh","-c","redis-cli -h 127.0.0.1 ping"]
+          failureThreshold: 3
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 3
+        {{- else }}
+        {{- with .Values.readinessProbe }}
+        readinessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- end }}
+        volumeMounts:
+        - name: {{ .Values.clusterName }}-base-conf
+          mountPath: /etc/redis/
+        - name: {{ .Values.clusterName }}-data
+          mountPath: /data
+        - name: tz-config
+          mountPath: /etc/localtime
+          readOnly: true
+        {{- with .Values.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      - env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.clusterName }}-conf
+              key: redis.password
+        image: oliver006/redis_exporter:v1.50.0
+        name: redis-exporter
+        ports:
+        - containerPort: 9121
+          name: http-metrics
+          protocol: TCP
+        resources:
+          limits:
+            cpu: "2"
+            memory: 500Mi
+          requests:
+            cpu: 100m
+            memory: 50Mi
+      volumes:
+      - name: {{ .Values.clusterName }}-base-conf
+        configMap:
+          name: {{ .Values.clusterName }}-base-conf
+          defaultMode: 0644
+      - name: tz-config
+        hostPath:
+          path: /etc/localtime
+  volumeClaimTemplates:
+  - metadata:
+      name: {{ .Values.clusterName }}-data
+      namespace: {{ .Values.namespace }}
+    spec:
+      storageClassName: {{ .Values.storageClassName }}
+      accessModes: [{{ .Values.accessModes }}]
+      resources:
+        requests:
+          storage: {{ .Values.storageCapacity }}
