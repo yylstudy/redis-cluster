@@ -137,9 +137,11 @@ spec:
               sleep 5
               clientPort=$(($CLUSTER_ANNOUNCE_PORT_START+podnum))
               redis-cli -a ${REDISCLI_AUTH} shutdown nosave
-              echo "正在启动redis服务"
-              redis-server /etc/redis/redis.conf 
-              fi
+            else
+              echo '无需初始化集群信息'
+            fi
+            echo "正在启动redis服务"
+            redis-server /etc/redis/redis.conf
           else
             echo '无需初始化集群信息'
             redis-server /etc/redis/redis.conf
